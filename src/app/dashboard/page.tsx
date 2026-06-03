@@ -12,7 +12,7 @@ import { Group, Message, Task, TaskStatus, TaskPriority } from "@/types";
 import {
   MessageSquare, Plus, LogOut, Send, X, Hash, Clock,
   CheckCircle2, Circle, CalendarClock, Users, CheckSquare, Bell,
-  Heart, Menu, ChevronLeft, ListTodo,
+  Heart, Menu, ChevronLeft, ListTodo, UserPlus, Trash2,
 } from "lucide-react";
 import { format, isPast } from "date-fns";
 import { ja } from "date-fns/locale";
@@ -58,7 +58,10 @@ export default function DashboardPage() {
   const [newGroupDesc, setNewGroupDesc] = useState("");
   const [showSidebar, setShowSidebar] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("chat");
-  const [likePopover, setLikePopover] = useState<string | null>(null); // messageId
+  const [likePopover, setLikePopover] = useState<string | null>(null);
+  const [showAddMember, setShowAddMember] = useState(false);
+  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [memberSearch, setMemberSearch] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const knownTaskIds = useRef<Set<string>>(new Set());
   const isFirstLoad = useRef(true);
@@ -178,6 +181,31 @@ export default function DashboardPage() {
     } else {
       await addDoc(collection(db, "messages"), { groupId:selectedGroup.id, senderId:user.uid, senderName:user.displayName||user.email, content:text, createdAt:serverTimestamp(), likes:[] });
     }
+  };
+
+  // 全ユーザー読み込み（メンバー追加用）
+  useEffect(() => {
+    getDocs(collection(db, "users")).then((snap) => {
+      setAllUsers(snap.docs.map((d) => d.data() as UserProfile));
+    });
+  }, []);
+
+  const addMember = async (targetUser: UserProfile) => {
+    if (!selectedGroup) return;
+    await updateDoc(doc(db, "groups", selectedGroup.id), {
+      memberIds: arrayUnion(targetUser.uid),
+    });
+    setMembers((prev) => [...prev, targetUser]);
+    setSelectedGroup((prev) => prev ? { ...prev, memberIds: [...(prev.memberIds || []), targetUser.uid] } : prev);
+  };
+
+  const removeMember = async (uid: string) => {
+    if (!selectedGroup || uid === selectedGroup.createdBy) return;
+    await updateDoc(doc(db, "groups", selectedGroup.id), {
+      memberIds: arrayRemove(uid),
+    });
+    setMembers((prev) => prev.filter((m) => m.uid !== uid));
+    setSelectedGroup((prev) => prev ? { ...prev, memberIds: prev.memberIds.filter((id) => id !== uid) } : prev);
   };
 
   const toggleLike = async (messageId: string, liked: boolean) => {
@@ -376,6 +404,11 @@ export default function DashboardPage() {
         <Users className="w-4 h-4 text-gray-500" />
         <span className="font-semibold text-gray-800 text-sm">メンバー</span>
         <span className="text-xs text-gray-400">({selectedGroup?.memberIds?.length || 0}人)</span>
+        {selectedGroup?.createdBy === user?.uid && (
+          <button onClick={() => setShowAddMember(true)} className="ml-auto flex items-center gap-1 text-xs text-blue-600 hover:bg-blue-50 px-2 py-1 rounded-lg transition-colors">
+            <UserPlus className="w-3.5 h-3.5" />追加
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-3 space-y-1">
         {members.map((member) => (
@@ -387,9 +420,14 @@ export default function DashboardPage() {
               <p className="text-sm font-medium text-gray-900 truncate">{member.displayName || "名前未設定"}</p>
               <p className="text-xs text-gray-400 truncate">{member.email}</p>
             </div>
-            <div className="flex gap-1 flex-shrink-0">
+            <div className="flex items-center gap-1 flex-shrink-0">
               {member.uid === user?.uid && <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">自分</span>}
               {member.uid === selectedGroup?.createdBy && <span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">管理者</span>}
+              {selectedGroup?.createdBy === user?.uid && member.uid !== user?.uid && member.uid !== selectedGroup?.createdBy && (
+                <button onClick={() => removeMember(member.uid)} className="text-gray-300 hover:text-red-400 transition-colors ml-1">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -576,6 +614,53 @@ export default function DashboardPage() {
                 <button onClick={() => setShowCreateGroup(false)} className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm font-medium">キャンセル</button>
                 <button onClick={createGroup} disabled={!newGroupName.trim()} className="flex-1 bg-blue-600 disabled:bg-blue-300 text-white px-4 py-2.5 rounded-lg text-sm font-medium">作成</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Member Modal */}
+      {showAddMember && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">メンバーを追加</h2>
+              <button onClick={() => { setShowAddMember(false); setMemberSearch(""); }}><X className="w-5 h-5 text-gray-400" /></button>
+            </div>
+            <input
+              value={memberSearch}
+              onChange={(e) => setMemberSearch(e.target.value)}
+              placeholder="名前またはメールで検索"
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm mb-3"
+              autoFocus
+            />
+            <div className="space-y-1 max-h-64 overflow-y-auto">
+              {allUsers
+                .filter((u) => !selectedGroup?.memberIds?.includes(u.uid))
+                .filter((u) => {
+                  const q = memberSearch.toLowerCase();
+                  return !q || u.displayName?.toLowerCase().includes(q) || u.email?.toLowerCase().includes(q);
+                })
+                .map((u) => (
+                  <div key={u.uid} className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50">
+                    <div className="w-9 h-9 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">
+                      {(u.displayName || u.email || "?").charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-900">{u.displayName}</p>
+                      <p className="text-xs text-gray-400 truncate">{u.email}</p>
+                    </div>
+                    <button
+                      onClick={() => addMember(u)}
+                      className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium flex-shrink-0"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />追加
+                    </button>
+                  </div>
+                ))}
+              {allUsers.filter((u) => !selectedGroup?.memberIds?.includes(u.uid)).length === 0 && (
+                <p className="text-center text-gray-400 text-sm py-4">追加できるユーザーがいません</p>
+              )}
             </div>
           </div>
         </div>
