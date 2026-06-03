@@ -29,6 +29,48 @@ export interface Message {
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "low" | "medium" | "high";
 
+export interface DMConversation {
+  id: string;
+  participants: string[];
+  participantNames: Record<string, string>;
+  lastMessage?: string;
+  lastMessageAt?: Date;
+}
+
+export interface DMMessage {
+  id: string;
+  dmId: string;
+  senderId: string;
+  senderName: string;
+  content: string;
+  createdAt: Date;
+  readBy: string[];
+  likes: string[];
+}
+
+export interface UserSettings {
+  notificationsEnabled: boolean;
+  silentStart: string;
+  silentEnd: string;
+}
+
+export interface Template {
+  id: string;
+  groupId: string;
+  text: string;
+  label: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: Date;
+}
+
+export interface DictionaryWord {
+  id: string;
+  groupId: string;
+  word: string;
+  createdBy: string;
+}
+
 export interface Assignee {
   uid: string;
   name: string;

@@ -8,14 +8,17 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
-import { Group, Message, Task, TaskStatus, TaskPriority } from "@/types";
+import { Group, Message, Task, TaskStatus, TaskPriority, DMConversation, UserSettings } from "@/types";
 import {
   MessageSquare, Plus, LogOut, Send, X, Hash, Clock,
   CheckCircle2, Circle, CalendarClock, Users, CheckSquare, Bell,
-  Heart, Menu, ChevronLeft, ListTodo, UserPlus, Trash2,
+  Heart, Menu, ListTodo, UserPlus, Trash2, Settings, BookOpen, MessageCircle,
 } from "lucide-react";
 import { format, isPast } from "date-fns";
 import { ja } from "date-fns/locale";
+import SettingsModal from "@/components/SettingsModal";
+import TemplateManager from "@/components/TemplateManager";
+import DMChat from "@/components/DMChat";
 
 const GROUP_COLORS = [
   "bg-blue-500","bg-purple-500","bg-green-500","bg-orange-500",
@@ -62,6 +65,15 @@ export default function DashboardPage() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
+  // 新機能
+  const [showSettings, setShowSettings] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [activeDM, setActiveDM] = useState<DMConversation | null>(null);
+  const [dmConversations, setDmConversations] = useState<DMConversation[]>([]);
+  const [userSettings, setUserSettings] = useState<UserSettings>({ notificationsEnabled: true, silentStart: "22:00", silentEnd: "08:00" });
+  // 予測変換
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const knownTaskIds = useRef<Set<string>>(new Set());
   const isFirstLoad = useRef(true);
@@ -183,12 +195,79 @@ export default function DashboardPage() {
     }
   };
 
-  // 全ユーザー読み込み（メンバー追加用）
+  // 全ユーザー読み込み
   useEffect(() => {
     getDocs(collection(db, "users")).then((snap) => {
       setAllUsers(snap.docs.map((d) => d.data() as UserProfile));
     });
   }, []);
+
+  // ユーザー設定読み込み
+  useEffect(() => {
+    if (!user) return;
+    const { getDoc } = require("firebase/firestore");
+    getDoc(doc(db, "userSettings", user.uid)).then((snap: any) => {
+      if (snap.exists()) setUserSettings(snap.data() as UserSettings);
+    });
+  }, [user]);
+
+  // DM会話一覧
+  useEffect(() => {
+    if (!user) return;
+    return onSnapshot(collection(db, "dm_conversations"), (snap) => {
+      const data = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as DMConversation))
+        .filter((c) => c.participants?.includes(user.uid));
+      setDmConversations(data);
+    });
+  }, [user]);
+
+  // 予測変換：入力に応じて候補を更新
+  const updateSuggestions = useCallback((input: string) => {
+    if (input.length < 2) { setSuggestions([]); setShowSuggestions(false); return; }
+    const q = input.toLowerCase();
+    // 過去メッセージから候補抽出
+    const fromMessages = messages
+      .map((m) => m.content)
+      .filter((c) => c.toLowerCase().startsWith(q) && c !== input)
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .slice(0, 3);
+    setSuggestions(fromMessages);
+    setShowSuggestions(fromMessages.length > 0);
+  }, [messages]);
+
+  // DM会話を開く or 作成
+  const openDM = async (partner: UserProfile) => {
+    if (!user) return;
+    const dmId = [user.uid, partner.uid].sort().join("_");
+    const existing = dmConversations.find((c) => c.id === dmId);
+    if (!existing) {
+      await addDoc(collection(db, "dm_conversations"), {
+        id: dmId, participants: [user.uid, partner.uid],
+        participantNames: {
+          [user.uid]: user.displayName || user.email || "",
+          [partner.uid]: partner.displayName || partner.email || "",
+        },
+      }).catch(() => {});
+      // setDoc with id
+      const { setDoc } = require("firebase/firestore");
+      await setDoc(doc(db, "dm_conversations", dmId), {
+        participants: [user.uid, partner.uid],
+        participantNames: {
+          [user.uid]: user.displayName || user.email || "",
+          [partner.uid]: partner.displayName || partner.email || "",
+        },
+      });
+    }
+    setActiveDM({
+      id: dmId, participants: [user.uid, partner.uid],
+      participantNames: {
+        [user.uid]: user.displayName || user.email || "",
+        [partner.uid]: partner.displayName || partner.email || "",
+      },
+    });
+    setShowSidebar(false);
+  };
 
   const addMember = async (targetUser: UserProfile) => {
     if (!selectedGroup) return;
@@ -329,8 +408,29 @@ export default function DashboardPage() {
         {showSchedule && scheduleDateTime && (
           <p className="text-xs text-amber-600 mb-1.5 px-1">{format(new Date(scheduleDateTime), "M月d日 HH:mm", { locale:ja })} に送信予定</p>
         )}
+        {/* 予測変換候補 */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div className="mb-1 flex flex-wrap gap-1">
+            {suggestions.map((s, i) => (
+              <button key={i} type="button" onClick={() => { setNewMessage(s); setSuggestions([]); setShowSuggestions(false); }}
+                className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded-lg hover:bg-blue-100 transition-colors max-w-xs truncate">
+                {s}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2 bg-gray-50 rounded-xl border border-gray-200 px-3 py-2">
-          <input value={newMessage} onChange={(e) => setNewMessage(e.target.value)} placeholder={showSchedule ? "予約メッセージを入力" : "メッセージを送る"} className="flex-1 bg-transparent outline-none text-sm placeholder-gray-400 min-w-0" />
+          <input
+            value={newMessage}
+            onChange={(e) => { setNewMessage(e.target.value); updateSuggestions(e.target.value); }}
+            onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+            onFocus={() => newMessage.length >= 2 && updateSuggestions(newMessage)}
+            placeholder={showSchedule ? "予約メッセージを入力" : "メッセージを送る"}
+            className="flex-1 bg-transparent outline-none text-sm placeholder-gray-400 min-w-0"
+          />
+          <button type="button" onClick={() => setShowTemplates(true)} className="flex-shrink-0 text-gray-400 hover:text-blue-500 transition-colors" title="定型文">
+            <BookOpen className="w-4 h-4" />
+          </button>
           <button type="button" onClick={() => setShowSchedule(!showSchedule)} className={`flex-shrink-0 transition-colors ${showSchedule ? "text-amber-500" : "text-gray-400 hover:text-amber-500"}`}>
             <CalendarClock className="w-4 h-4" />
           </button>
@@ -423,6 +523,11 @@ export default function DashboardPage() {
             <div className="flex items-center gap-1 flex-shrink-0">
               {member.uid === user?.uid && <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full">自分</span>}
               {member.uid === selectedGroup?.createdBy && <span className="text-xs bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full">管理者</span>}
+              {member.uid !== user?.uid && (
+                <button onClick={() => openDM(member)} className="text-gray-300 hover:text-purple-500 transition-colors ml-1" title="DMを送る">
+                  <MessageCircle className="w-3.5 h-3.5" />
+                </button>
+              )}
               {selectedGroup?.createdBy === user?.uid && member.uid !== user?.uid && member.uid !== selectedGroup?.createdBy && (
                 <button onClick={() => removeMember(member.uid)} className="text-gray-300 hover:text-red-400 transition-colors ml-1">
                   <Trash2 className="w-3.5 h-3.5" />
@@ -508,7 +613,30 @@ export default function DashboardPage() {
             ))
           }
         </div>
-        <div className="p-3 border-t border-gray-700">
+        {/* DM セクション */}
+        {dmConversations.length > 0 && (
+          <div className="px-3 pb-2">
+            <p className="text-gray-400 text-xs font-semibold uppercase tracking-wide mb-1">ダイレクトメッセージ</p>
+            {dmConversations.map((dm) => {
+              const partnerId = dm.participants?.find((p) => p !== user?.uid) ?? "";
+              const partnerName = dm.participantNames?.[partnerId] ?? "不明";
+              return (
+                <button key={dm.id} onClick={() => setActiveDM(dm)}
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-lg mb-0.5 text-left transition-colors ${activeDM?.id === dm.id ? "bg-purple-600" : "text-gray-300 hover:bg-gray-700"}`}>
+                  <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-400 to-pink-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                    {partnerName.charAt(0)}
+                  </div>
+                  <span className="text-sm truncate">{partnerName}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="p-3 border-t border-gray-700 space-y-1">
+          <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg text-sm">
+            <Settings className="w-4 h-4" />通知設定
+          </button>
           <button onClick={logout} className="w-full flex items-center gap-2 px-3 py-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg text-sm"><LogOut className="w-4 h-4" />ログアウト</button>
         </div>
       </div>
@@ -589,6 +717,36 @@ export default function DashboardPage() {
                 <Plus className="w-4 h-4" />グループを作成
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {showSettings && user && (
+        <SettingsModal userId={user.uid} onClose={() => setShowSettings(false)} />
+      )}
+
+      {/* Template Manager */}
+      {showTemplates && selectedGroup && user && (
+        <TemplateManager
+          groupId={selectedGroup.id}
+          userId={user.uid}
+          userName={user.displayName || user.email || ""}
+          onInsert={(text) => setNewMessage(text)}
+          onClose={() => setShowTemplates(false)}
+        />
+      )}
+
+      {/* DM Chat Modal */}
+      {activeDM && user && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg h-[600px] flex flex-col overflow-hidden">
+            <DMChat
+              dmId={activeDM.id}
+              currentUserId={user.uid}
+              partnerName={activeDM.participantNames?.[activeDM.participants?.find((p) => p !== user.uid) ?? ""] ?? "相手"}
+              onClose={() => setActiveDM(null)}
+            />
           </div>
         </div>
       )}
