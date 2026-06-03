@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   collection, addDoc, onSnapshot, query, orderBy,
   serverTimestamp, Timestamp, doc, updateDoc, deleteDoc, getDocs,
-  arrayUnion, arrayRemove,
+  arrayUnion, arrayRemove, getDoc, setDoc,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
@@ -205,8 +205,7 @@ export default function DashboardPage() {
   // ユーザー設定読み込み
   useEffect(() => {
     if (!user) return;
-    const { getDoc } = require("firebase/firestore");
-    getDoc(doc(db, "userSettings", user.uid)).then((snap: any) => {
+    getDoc(doc(db, "userSettings", user.uid)).then((snap) => {
       if (snap.exists()) setUserSettings(snap.data() as UserSettings);
     });
   }, [user]);
@@ -242,15 +241,6 @@ export default function DashboardPage() {
     const dmId = [user.uid, partner.uid].sort().join("_");
     const existing = dmConversations.find((c) => c.id === dmId);
     if (!existing) {
-      await addDoc(collection(db, "dm_conversations"), {
-        id: dmId, participants: [user.uid, partner.uid],
-        participantNames: {
-          [user.uid]: user.displayName || user.email || "",
-          [partner.uid]: partner.displayName || partner.email || "",
-        },
-      }).catch(() => {});
-      // setDoc with id
-      const { setDoc } = require("firebase/firestore");
       await setDoc(doc(db, "dm_conversations", dmId), {
         participants: [user.uid, partner.uid],
         participantNames: {
