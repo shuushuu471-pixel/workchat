@@ -20,7 +20,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email, password);
-      router.push("/dashboard");
+      router.replace("/dashboard");
     } catch {
       setError("メールアドレスまたはパスワードが正しくありません");
     } finally {
